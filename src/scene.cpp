@@ -6,7 +6,7 @@
 #define TINYOBJLOADER_IMPLEMENTATION // define this in only *one* .cc
 #include "tinyobj/tiny_obj_loader.h"
 
-#define BUILD_RANDOM_SCENE 1
+#define BUILD_RANDOM_SCENE 0
 
 Scene::Scene(string filename) {
 #if BUILD_RANDOM_SCENE

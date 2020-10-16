@@ -95,3 +95,7 @@ struct ShadeableIntersection {
   int materialId;
   glm::vec3 point;
 };
+
+struct GBufferPixel {
+    float t;
+};
