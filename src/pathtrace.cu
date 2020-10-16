@@ -26,6 +26,7 @@
 #define ANTIALIASING 0
 #define MOTION_BLUR_ENABLE 0
 #define AMBIENT_LIGHT_ENABLE 0
+#define SHOW_NORMAL_BUFFER 0
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -84,12 +85,24 @@ __global__ void gbufferToPBO(uchar4* pbo, glm::ivec2 resolution, GBufferPixel* g
 
 	if (x < resolution.x && y < resolution.y) {
 		int index = x + (y * resolution.x);
-		float timeToIntersect = gBuffer[index].t * 256.0;
+#if SHOW_NORMAL_BUFFER
+		glm::vec3 normal = glm::normalize(gBuffer[index].normal) * 255.0f;
 
 		pbo[index].w = 0;
-		pbo[index].x = timeToIntersect;
-		pbo[index].y = timeToIntersect;
-		pbo[index].z = timeToIntersect;
+		pbo[index].x = abs(normal.x);
+		pbo[index].y = abs(normal.y);
+		pbo[index].z = abs(normal.z);
+#else
+		float scaler = 25.0;
+		glm::vec3 pos = gBuffer[index].pos * scaler;
+		pos = glm::abs(pos);
+		pos = glm::clamp(pos, 0.0f, 255.0f);
+
+		pbo[index].w = 0;
+		pbo[index].x = pos.x;
+		pbo[index].y = pos.y;
+		pbo[index].z = pos.z;
+#endif
 	}
 }
 
@@ -422,7 +435,8 @@ __global__ void generateGBuffer(
 	int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx < num_paths)
 	{
-		gBuffer[idx].t = shadeableIntersections[idx].t;
+		gBuffer[idx].normal = shadeableIntersections[idx].surfaceNormal;
+		gBuffer[idx].pos = shadeableIntersections[idx].point;
 	}
 }
 
