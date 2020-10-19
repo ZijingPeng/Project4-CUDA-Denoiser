@@ -26,7 +26,7 @@
 #define ANTIALIASING 0
 #define MOTION_BLUR_ENABLE 0
 #define AMBIENT_LIGHT_ENABLE 0
-#define SHOW_NORMAL_BUFFER 0
+#define SHOW_GBUFFER 1
 
 #define FILENAME (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 #define checkCUDAError(msg) checkCUDAErrorFn(msg, FILENAME, __LINE__)
@@ -85,14 +85,14 @@ __global__ void gbufferToPBO(uchar4* pbo, glm::ivec2 resolution, GBufferPixel* g
 
 	if (x < resolution.x && y < resolution.y) {
 		int index = x + (y * resolution.x);
-#if SHOW_NORMAL_BUFFER
+#if SHOW_GBUFFER == 0
 		glm::vec3 normal = glm::normalize(gBuffer[index].normal) * 255.0f;
 
 		pbo[index].w = 0;
 		pbo[index].x = abs(normal.x);
 		pbo[index].y = abs(normal.y);
 		pbo[index].z = abs(normal.z);
-#else
+#elif SHOW_GBUFFER == 1
 		float scaler = 25.0;
 		glm::vec3 pos = gBuffer[index].pos * scaler;
 		pos = glm::abs(pos);
@@ -106,6 +106,21 @@ __global__ void gbufferToPBO(uchar4* pbo, glm::ivec2 resolution, GBufferPixel* g
 	}
 }
 
+__global__ void initDenoisedImage(glm::vec3* image, glm::vec3* denoisedImage, glm::ivec2 resolution, int iter)
+{
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+	if (x < resolution.x && y < resolution.y) {
+		int index = x + (y * resolution.x);
+		glm::vec3 pix = image[index];
+		pix.x = glm::clamp(pix.x / iter, 0.f, 1.f);
+		pix.y = glm::clamp(pix.y / iter, 0.f, 1.f);
+		pix.z = glm::clamp(pix.z / iter, 0.f, 1.f);
+		denoisedImage[index] = pix;
+	}
+}
+
 static Scene* hst_scene = NULL;
 static glm::vec3* dev_image = NULL;
 static Geom* dev_geoms = NULL;
@@ -115,8 +130,19 @@ static ShadeableIntersection* dev_intersections = NULL;
 static ShadeableIntersection* dev_intersections_cache = NULL;
 static Triangle* dev_triangles = NULL;
 static GBufferPixel* dev_gBuffer = NULL;
-// TODO: static variables for device memory, any extra info you need, etc
-// ...
+static glm::vec3* dev_denoised_image = NULL;
+static glm::vec3* dev_denoised_image2 = NULL;
+static float* dev_kernel = NULL;
+
+
+static float host_kernel[] =
+{
+	0.003765,	0.015019,	0.023792,	0.015019,	0.003765,
+	0.015019,	0.059912,	0.094907,	0.059912,	0.015019,
+	0.023792,	0.094907,	0.150342,	0.094907,	0.023792,
+	0.015019,	0.059912,	0.094907,	0.059912,	0.015019,
+	0.003765,	0.015019,	0.023792,	0.015019,	0.003765
+};
 
 // variables for profiling
 cudaEvent_t start, stop;
@@ -147,6 +173,15 @@ void pathtraceInit(Scene* scene) {
 
 	cudaMalloc(&dev_gBuffer, pixelcount * sizeof(GBufferPixel));
 
+	cudaMalloc(&dev_denoised_image, pixelcount * sizeof(glm::vec3));
+	cudaMemset(dev_denoised_image, 0, pixelcount * sizeof(glm::vec3));
+
+	cudaMalloc(&dev_denoised_image2, pixelcount * sizeof(glm::vec3));
+	cudaMemset(dev_denoised_image2, 0, pixelcount * sizeof(glm::vec3));
+
+	cudaMalloc(&dev_kernel, 10 * 10 * sizeof(float));
+	cudaMemcpy(dev_kernel, host_kernel, 25 * sizeof(float), cudaMemcpyHostToDevice);
+
 #if CACHE_ENABLE
 	cudaMalloc(&dev_intersections_cache, pixelcount * sizeof(ShadeableIntersection));
 	cudaMemset(dev_intersections_cache, 0, pixelcount * sizeof(ShadeableIntersection));
@@ -168,6 +203,9 @@ void pathtraceFree() {
 	cudaFree(dev_materials);
 	cudaFree(dev_intersections);
 	cudaFree(dev_gBuffer);
+	cudaFree(dev_denoised_image);
+	cudaFree(dev_denoised_image2);
+	cudaFree(dev_kernel);
 #if CACHE_ENABLE
 	cudaFree(dev_intersections_cache);
 #endif // CACHE_ENABLE
@@ -604,8 +642,6 @@ void pathtrace(int frame, int iter) {
 		thrust::sort_by_key(pIntersection, pIntersection + remaining_paths, pPathSegment, material_cmp());
 #endif // SORT_BY_MATERIAL
 
-		
-
 		// TODO:
 		// --- Shading Stage ---
 		// Shade path segments based on intersections and generate new rays by
@@ -653,7 +689,7 @@ void pathtrace(int frame, int iter) {
 	// Assemble this iteration and apply it to the image
 	dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
 	finalGather << <numBlocksPixels, blockSize1d >> > (num_paths, dev_image, dev_paths);
-
+	
 	///////////////////////////////////////////////////////////////////////////
 
 	// CHECKITOUT: use dev_image as reference if you want to implement saving denoised images.
@@ -673,7 +709,7 @@ void showGBuffer(uchar4* pbo) {
 	const dim3 blocksPerGrid2d(
 	(cam.resolution.x + blockSize2d.x - 1) / blockSize2d.x,
 		(cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
-
+	
 	// CHECKITOUT: process the gbuffer results and send them to OpenGL buffer for visualization
 	gbufferToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, dev_gBuffer);
 }
@@ -687,4 +723,92 @@ void showImage(uchar4* pbo, int iter) {
 
 	// Send results to OpenGL buffer for rendering
 	sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, iter, dev_image);
+}
+
+void showDenoisedImage(uchar4* pbo) {
+	const Camera& cam = hst_scene->state.camera;
+	const dim3 blockSize2d(8, 8);
+	const dim3 blocksPerGrid2d(
+	(cam.resolution.x + blockSize2d.x - 1) / blockSize2d.x,
+		(cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
+
+	// Send results to OpenGL buffer for rendering
+	sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, 1, dev_denoised_image);
+}
+
+// apply the denoise shader
+__global__ void applyFilter(
+	int stepWidth,
+	glm::ivec2 resolution, 
+	glm::vec3* i_data, 
+	glm::vec3* o_data,
+	GBufferPixel* gBuffer, 
+	int filter_size, 
+	float *kernel,
+	float c_phi,
+	float n_phi,
+	float p_phi
+	) {
+	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
+	int y = (blockIdx.y * blockDim.y) + threadIdx.y;
+
+	if (x < resolution.x && y < resolution.y) {
+		int index = x + (y * resolution.x);
+		glm::vec3 sum = glm::vec3(0.0);
+		glm::vec3 cval = i_data[index];
+		glm::vec3 nval = gBuffer[index].normal;
+		glm::vec3 pval = gBuffer[index].pos;
+
+		float cum_w = 0.0;
+		int halfFilterWidth = filter_size / 2;
+		for (int i = -halfFilterWidth; i <= halfFilterWidth; i++) {
+			for (int j = -halfFilterWidth; j <= halfFilterWidth; j++) {
+				float xx = x + stepWidth * i;
+				float yy = y + stepWidth * j;
+
+				xx = glm::clamp(xx, 0.0f, resolution.x - 1.0f);
+				yy = glm::clamp(yy, 0.0f, resolution.y - 1.0f);
+				
+				int neighboor = xx + (yy * resolution.x);
+
+				glm::vec3 ctmp = i_data[neighboor];
+				glm::vec3 t = cval - ctmp;
+				float dist2 = glm::dot(t, t);
+				float c_w = min(expf(-(dist2) / c_phi), 1.0);
+
+				glm::vec3 ntmp = gBuffer[neighboor].normal;
+				t = nval - ntmp;
+				dist2 = max(glm::dot(t, t) / (stepWidth * stepWidth), 0.0);
+				float n_w = min(expf(-(dist2) / n_phi), 1.0);
+
+				glm::vec3 ptmp = gBuffer[neighboor].pos;
+				t = pval - ptmp;
+				dist2 = glm::dot(t, t);
+				float p_w = min(expf(-(dist2) / p_phi), 1.0);
+
+				float weight = c_w * n_w * p_w;
+				int kernelIndex = (i + halfFilterWidth) + (j + halfFilterWidth) * filter_size;
+				sum += ctmp * weight * kernel[kernelIndex];
+				cum_w += weight * kernel[kernelIndex];
+			}
+		}
+		o_data[index] = sum / cum_w;
+	}
+}
+
+void denoise(uchar4* pbo, int iter, int filter_size, float cw, float nw, float pw) {
+	const Camera& cam = hst_scene->state.camera;
+	const dim3 blockSize2d(8, 8);
+	const dim3 blocksPerGrid2d(
+	(cam.resolution.x + blockSize2d.x - 1) / blockSize2d.x,
+		(cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
+
+	initDenoisedImage << < blocksPerGrid2d, blockSize2d >> > (dev_image, dev_denoised_image, cam.resolution, iter);
+
+	for (int i = 0; i < filter_size; i++) {
+		applyFilter << <blocksPerGrid2d, blockSize2d >> > (1 << i, cam.resolution, dev_denoised_image, dev_denoised_image2, dev_gBuffer, 5, dev_kernel, cw, nw, pw);
+		std::swap(dev_denoised_image, dev_denoised_image2);
+	}
+	// Send results to OpenGL buffer for rendering
+	sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, iter, dev_denoised_image);
 }
