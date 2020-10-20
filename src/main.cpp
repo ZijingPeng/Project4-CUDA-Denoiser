@@ -24,7 +24,7 @@ int startupIterations = 0;
 int lastLoopIterations = 0;
 bool ui_showGbuffer = false;
 bool ui_denoise = false;
-int ui_filterSize = 80;
+int ui_filterSize = 5;
 float ui_colorWeight = 0.45f;
 float ui_normalWeight = 0.35f;
 float ui_positionWeight = 0.2f;
@@ -122,8 +122,8 @@ void saveImage() {
 
 void runCuda() {
     if (lastLoopIterations != ui_iterations) {
-      lastLoopIterations = ui_iterations;
-      camchanged = true;
+        lastLoopIterations = ui_iterations;
+        camchanged = true;
     }
 
     if (camchanged) {
@@ -154,7 +154,7 @@ void runCuda() {
         pathtraceInit(scene);
     }
 
-    uchar4 *pbo_dptr = NULL;
+    uchar4* pbo_dptr = NULL;
     cudaGLMapBufferObject((void**)&pbo_dptr, pbo);
 
     if (iteration < ui_iterations) {
@@ -164,16 +164,20 @@ void runCuda() {
         int frame = 0;
         pathtrace(frame, iteration);
     }
-
-    if (ui_showGbuffer) {
-      showGBuffer(pbo_dptr);
-    } else {
-      showImage(pbo_dptr, iteration);
+    if (ui_denoise) {
+        denoise(pbo_dptr, iteration, ui_filterSize, ui_colorWeight, ui_normalWeight, ui_positionWeight);
+        showDenoisedImage(pbo_dptr);
     }
+    else if (ui_showGbuffer) {
+        showGBuffer(pbo_dptr);
+    }
+    else {
+        showImage(pbo_dptr, iteration);
+    }
+
 
     // unmap buffer object
     cudaGLUnmapBufferObject(pbo);
-
     if (ui_saveAndExit) {
         saveImage();
         pathtraceFree();
