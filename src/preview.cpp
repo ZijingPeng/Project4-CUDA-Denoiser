@@ -186,6 +186,7 @@ bool init() {
 }
 
 static ImGuiWindowFlags windowFlags = ImGuiWindowFlags_None | ImGuiWindowFlags_NoMove;
+
 static bool ui_hide = false;
 
 void drawGui(int windowWidth, int windowHeight) {

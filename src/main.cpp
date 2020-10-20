@@ -164,7 +164,6 @@ void runCuda() {
         int frame = 0;
         pathtrace(frame, iteration);
     }
-
     if (ui_denoise) {
         denoise(pbo_dptr, iteration, ui_filterSize, ui_colorWeight, ui_normalWeight, ui_positionWeight);
         showDenoisedImage(pbo_dptr);
@@ -179,8 +178,6 @@ void runCuda() {
 
     // unmap buffer object
     cudaGLUnmapBufferObject(pbo);
-
-
     if (ui_saveAndExit) {
         saveImage();
         pathtraceFree();
@@ -210,6 +207,7 @@ void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 }
 
 void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {
+  if (ImGui::GetIO().WantCaptureMouse) return;
   leftMousePressed = (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS);
   rightMousePressed = (button == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS);
   middleMousePressed = (button == GLFW_MOUSE_BUTTON_MIDDLE && action == GLFW_PRESS);

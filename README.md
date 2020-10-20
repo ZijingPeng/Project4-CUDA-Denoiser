@@ -1,7 +1,7 @@
-CUDA Path Tracer
-================
+CUDA Denoiser For CUDA Path Tracer
+==================================
 
-**University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 3**
+**University of Pennsylvania, CIS 565: GPU Programming and Architecture, Project 4**
 
 - Zijing Peng
 - Tested on: Windows 22, i7-8750H@ 2.22GHz 16GB, NVIDIA GeForce GTX 1060 (laptop)

@@ -105,7 +105,6 @@ __global__ void gbufferToPBO(uchar4* pbo, glm::ivec2 resolution, GBufferPixel* g
 #endif
 	}
 }
-
 __global__ void initDenoisedImage(glm::vec3* image, glm::vec3* denoisedImage, glm::ivec2 resolution, int iter)
 {
 	int x = (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -196,6 +195,7 @@ void pathtraceInit(Scene* scene) {
 }
 
 void pathtraceFree() {
+
 	cudaFree(dev_image);  // no-op if dev_image is null
 	cudaFree(dev_paths);
 	cudaFree(dev_geoms);
@@ -232,6 +232,7 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 		PathSegment& segment = pathSegments[index];
 
 		segment.ray.origin = cam.position;
+
 		segment.color = glm::vec3(1.0f, 1.0f, 1.0f);
 
 		// antialiasing
@@ -278,10 +279,6 @@ __global__ void generateRayFromCamera(Camera cam, int iter, int traceDepth, Path
 	}
 }
 
-// TODO:
-// computeIntersections handles generating ray intersections ONLY.
-// Generating new rays is handled in your shader(s).
-// Feel free to modify the code below.
 __global__ void computeIntersections(
 	int depth
 	, int num_paths
@@ -476,6 +473,7 @@ __global__ void generateGBuffer(
 		gBuffer[idx].normal = shadeableIntersections[idx].surfaceNormal;
 		gBuffer[idx].pos = shadeableIntersections[idx].point;
 	}
+
 }
 
 // Add the current iteration's output to the overall image
@@ -558,6 +556,7 @@ void pathtrace(int frame, int iter) {
 	// perform one iteration of path tracing
 
 	generateRayFromCamera << <blocksPerGrid2d, blockSize2d >> > (cam, iter, traceDepth, dev_paths);
+
 	checkCUDAError("generate camera ray");
 
 	int depth = 0;
@@ -577,6 +576,7 @@ void pathtrace(int frame, int iter) {
 
 	bool iterationComplete = false;
 	while (!iterationComplete) {
+
 
 		// clean shading chunks
 		cudaMemset(dev_intersections, 0, pixelcount * sizeof(ShadeableIntersection));
@@ -811,4 +811,27 @@ void denoise(uchar4* pbo, int iter, int filter_size, float cw, float nw, float p
 	}
 	// Send results to OpenGL buffer for rendering
 	sendImageToPBO << <blocksPerGrid2d, blockSize2d >> > (pbo, cam.resolution, iter, dev_denoised_image);
+}
+
+// CHECKITOUT: this kernel "post-processes" the gbuffer/gbuffers into something that you can visualize for debugging.
+void showGBuffer(uchar4* pbo) {
+    const Camera &cam = hst_scene->state.camera;
+    const dim3 blockSize2d(8, 8);
+    const dim3 blocksPerGrid2d(
+            (cam.resolution.x + blockSize2d.x - 1) / blockSize2d.x,
+            (cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
+
+    // CHECKITOUT: process the gbuffer results and send them to OpenGL buffer for visualization
+    gbufferToPBO<<<blocksPerGrid2d, blockSize2d>>>(pbo, cam.resolution, dev_gBuffer);
+}
+
+void showImage(uchar4* pbo, int iter) {
+const Camera &cam = hst_scene->state.camera;
+    const dim3 blockSize2d(8, 8);
+    const dim3 blocksPerGrid2d(
+            (cam.resolution.x + blockSize2d.x - 1) / blockSize2d.x,
+            (cam.resolution.y + blockSize2d.y - 1) / blockSize2d.y);
+
+    // Send results to OpenGL buffer for rendering
+    sendImageToPBO<<<blocksPerGrid2d, blockSize2d>>>(pbo, cam.resolution, iter, dev_image);
 }
